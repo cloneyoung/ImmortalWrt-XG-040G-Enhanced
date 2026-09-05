@@ -197,3 +197,44 @@ BOARDJSON_EOF
     echo "   - WAN2: lan3 (metric 20, IPv4+IPv6)"
     echo "   - LED: eth1/lan2/lan3/lan4 已绑定"
 fi
+# ==========================================================
+# 修复 Airoha 预置 board.json 后 /etc/config/system 不生成的问题
+# OpenWrt 默认逻辑：存在 /etc/board.json 时不会再次调用
+# /bin/config_generate，导致预置 network 后 system 缺失。
+# ==========================================================
+if [[ "${WRT_TARGET^^}" == *"AIROHA"* ]]; then
+    echo "=========================================="
+    echo "🔧 修复 Airoha config_generate / system 配置"
+    echo "=========================================="
+
+    PREINIT_CFG="./package/base-files/files/lib/preinit/82_config_generate"
+
+    mkdir -p "$(dirname "$PREINIT_CFG")"
+
+    cat > "$PREINIT_CFG" <<'EOF'
+do_config_generate() {
+	# 如果没有 board.json，先自动探测
+	[ -s /etc/board.json ] || {
+		echo "- generating board file -"
+		/bin/board_detect /tmp/board.json || return 1
+		mv /tmp/board.json /etc/board.json
+	}
+
+	# 只要 network 或 system 任意一个不存在，
+	# 就执行 config_generate。
+	#
+	# 这样：
+	# 1. 预置 board.json + network 时，可以补生成 system
+	# 2. network + system 都存在时，不会重复生成
+	[ -s /etc/config/network -a -s /etc/config/system ] || \
+		/bin/config_generate > /dev/null
+}
+
+boot_hook_add preinit_main do_config_generate
+boot_hook_add initramfs do_config_generate
+EOF
+
+    chmod 0755 "$PREINIT_CFG"
+
+    echo "✅ Airoha 82_config_generate 修复完成"
+fi
